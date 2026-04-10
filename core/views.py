@@ -3,17 +3,19 @@ from django.db import transaction
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
 from rest_framework import status
+from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import AllowAny
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Complaint, Coupon, CouponTransferRequest, Feedback, MessMenu, Student
+from .models import Complaint, Coupon, CouponTransferRequest, Feedback, Mess, MessMenu, Student
 from .serializers import (
     AuthUserSerializer,
     ComplaintSerializer,
     CouponSerializer,
-    CouponTransferCreateSerializer,
-    CouponTransferRequestSerializer,
+    CouponExchangeCreateSerializer,
+    CouponExchangeRequestSerializer,
     FeedbackSerializer,
     LoginSerializer,
     MessMenuCreateSerializer,
@@ -21,6 +23,11 @@ from .serializers import (
     SignupSerializer,
     StudentSerializer,
 )
+
+
+class CsrfExemptSessionAuthentication(SessionAuthentication):
+    def enforce_csrf(self, request):
+        return
 
 
 def health_check(request):
@@ -56,10 +63,16 @@ class LoginView(APIView):
         user = serializer.validated_data['user']
 
         login(request, user)
+
+        daily_coupons_created = 0
+        if hasattr(user, 'student'):
+            daily_coupons_created = Coupon.create_daily_coupons_for_student(user.student)
+
         return Response(
             {
                 'message': 'Login successful.',
                 'user': AuthUserSerializer(user).data,
+                'daily_coupons_created': daily_coupons_created,
             },
             status=status.HTTP_200_OK,
         )
@@ -96,6 +109,21 @@ class CouponQrView(APIView):
         )
 
 
+class CouponListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not hasattr(request.user, 'student'):
+            return Response({'detail': 'Only students have coupons.'}, status=status.HTTP_403_FORBIDDEN)
+
+        coupons = (
+            Coupon.objects.select_related('student', 'student__mess')
+            .filter(student=request.user.student)
+            .order_by('-coupon_date', 'coupon_meal')
+        )
+        return Response(CouponSerializer(coupons, many=True, context={'request': request}).data, status=status.HTTP_200_OK)
+
+
 class CouponVerifyView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
@@ -115,61 +143,75 @@ class CouponVerifyView(APIView):
         )
 
 
-class CouponTransferRequestCreateView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class CouponExchangeRequestCreateView(APIView):
+    authentication_classes = [CsrfExemptSessionAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not hasattr(request.user, 'student'):
+            return Response({'detail': 'Only students can view coupon exchange requests.'}, status=status.HTTP_403_FORBIDDEN)
+
+        exchange_requests = (
+            CouponTransferRequest.objects.select_related('coupon', 'requested_by', 'requested_to')
+            .filter(requested_to=request.user.student)
+            .order_by('-requested_at')
+        )
+        return Response(
+            CouponExchangeRequestSerializer(exchange_requests, many=True, context={'request': request}).data,
+            status=status.HTTP_200_OK,
+        )
 
     def post(self, request):
-        serializer = CouponTransferCreateSerializer(data=request.data, context={'request': request})
+        serializer = CouponExchangeCreateSerializer(data=request.data, context={'request': request})
         serializer.is_valid(raise_exception=True)
-        transfer_request = serializer.save()
-        return Response(CouponTransferRequestSerializer(transfer_request).data, status=status.HTTP_201_CREATED)
+        exchange_request = serializer.save()
+        return Response(CouponExchangeRequestSerializer(exchange_request).data, status=status.HTTP_201_CREATED)
 
 
-class CouponTransferAcceptView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class CouponExchangeAcceptView(APIView):
+    authentication_classes = [CsrfExemptSessionAuthentication]
+    permission_classes = [IsAuthenticated]
 
-    def post(self, request, transfer_id):
-        transfer_request = get_object_or_404(
+    def post(self, request, exchange_id):
+        exchange_request = get_object_or_404(
             CouponTransferRequest.objects.select_related('coupon', 'requested_by', 'requested_to'),
-            pk=transfer_id,
+            pk=exchange_id,
         )
 
         if not request.user.is_authenticated or not hasattr(request.user, 'student'):
             return Response({'detail': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        if transfer_request.requested_to_id != request.user.student.user_id:
-            return Response({'detail': 'Only the requested recipient can accept this transfer.'}, status=status.HTTP_403_FORBIDDEN)
+        if exchange_request.requested_to_id != request.user.student.user_id:
+            return Response({'detail': 'Only the requested recipient can accept this exchange.'}, status=status.HTTP_403_FORBIDDEN)
 
         with transaction.atomic():
-            transfer_request.accept()
+            exchange_request.accept()
 
-        transfer_request.refresh_from_db()
-        return Response(CouponTransferRequestSerializer(transfer_request).data, status=status.HTTP_200_OK)
+        exchange_request.refresh_from_db()
+        return Response(CouponExchangeRequestSerializer(exchange_request).data, status=status.HTTP_200_OK)
 
 
-class CouponTransferRejectView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+class CouponExchangeRejectView(APIView):
+    authentication_classes = [CsrfExemptSessionAuthentication]
+    permission_classes = [IsAuthenticated]
 
-    def post(self, request, transfer_id):
-        transfer_request = get_object_or_404(
+    def post(self, request, exchange_id):
+        exchange_request = get_object_or_404(
             CouponTransferRequest.objects.select_related('coupon', 'requested_by', 'requested_to'),
-            pk=transfer_id,
+            pk=exchange_id,
         )
 
         if not request.user.is_authenticated or not hasattr(request.user, 'student'):
             return Response({'detail': 'Authentication required.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        if transfer_request.requested_to_id != request.user.student.user_id:
-            return Response({'detail': 'Only the requested recipient can reject this transfer.'}, status=status.HTTP_403_FORBIDDEN)
+        if exchange_request.requested_to_id != request.user.student.user_id:
+            return Response({'detail': 'Only the requested recipient can reject this exchange.'}, status=status.HTTP_403_FORBIDDEN)
 
         with transaction.atomic():
-            transfer_request.reject()
+            exchange_request.reject()
 
-        transfer_request.refresh_from_db()
-        return Response(CouponTransferRequestSerializer(transfer_request).data, status=status.HTTP_200_OK)
+        exchange_request.refresh_from_db()
+        return Response(CouponExchangeRequestSerializer(exchange_request).data, status=status.HTTP_200_OK)
 
 
 class MessMenuListCreateView(APIView):
@@ -219,11 +261,14 @@ class FeedbackListCreateView(APIView):
 
         raised_by_id = request.query_params.get('raised_by_id')
         coupon_meal = request.query_params.get('coupon_meal')
+        hostel_id = request.query_params.get('hostel_id')
 
         if raised_by_id:
             feedbacks = feedbacks.filter(raised_by_id=raised_by_id)
         if coupon_meal:
             feedbacks = feedbacks.filter(coupon_meal=coupon_meal)
+        if hostel_id:
+            feedbacks = feedbacks.filter(hostel_id=hostel_id)
 
         return Response(FeedbackSerializer(feedbacks, many=True).data, status=status.HTTP_200_OK)
 
@@ -259,3 +304,12 @@ class ComplaintListCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         complaint = serializer.save()
         return Response(ComplaintSerializer(complaint).data, status=status.HTTP_201_CREATED)
+
+
+class MessNameListView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        mess_names = list(Mess.objects.order_by('name').values_list('name', flat=True))
+        return Response({'mess_names': mess_names}, status=status.HTTP_200_OK)

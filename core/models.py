@@ -1,5 +1,7 @@
 import uuid
 from io import BytesIO
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
 import qrcode
 from django.contrib.auth.base_user import BaseUserManager
@@ -148,11 +150,20 @@ class MessMenuItem(models.Model):
 
 class Feedback(models.Model):
 	raised_by = models.ForeignKey(User, on_delete=models.CASCADE, related_name='feedbacks')
+	hostel_id = models.CharField(max_length=50, blank=True, default='', db_index=True)
 	coupon_meal = models.CharField(max_length=1, choices=CouponMeal.choices)
 	rating = models.PositiveSmallIntegerField(
 		validators=[MinValueValidator(1), MaxValueValidator(5)]
 	)
 	description = models.TextField()
+
+	def save(self, *args, **kwargs):
+		if not self.hostel_id and self.raised_by_id:
+			if hasattr(self.raised_by, 'student'):
+				self.hostel_id = self.raised_by.student.hostel_id
+			elif hasattr(self.raised_by, 'staff'):
+				self.hostel_id = self.raised_by.staff.hostel_id
+		super().save(*args, **kwargs)
 
 	def __str__(self):
 		return f'Feedback {self.id} - {self.coupon_meal} - {self.rating}/5'
@@ -176,9 +187,17 @@ class Coupon(models.Model):
 	coupon_id = models.CharField(max_length=50, unique=True)
 	coupon_meal = models.CharField(max_length=1, choices=CouponMeal.choices)
 	coupon_date = models.DateField()
+	valid_till = models.DateTimeField(null=True, blank=True)
 	qr_token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
 	qr_payload = models.TextField(blank=True)
 	qr_image = models.ImageField(upload_to='coupon_qr/', blank=True)
+
+	VALID_TILL_BY_MEAL = {
+		CouponMeal.BREAKFAST: time(hour=10, minute=0),
+		CouponMeal.LUNCH: time(hour=14, minute=0),
+		CouponMeal.SNACKS: time(hour=18, minute=30),
+		CouponMeal.DINNER: time(hour=21, minute=0),
+	}
 
 	class Meta:
 		constraints = [
@@ -190,6 +209,46 @@ class Coupon(models.Model):
 
 	def build_qr_payload(self):
 		return str(self.qr_token)
+
+	def swap_with(self, other_coupon):
+		if self.pk == other_coupon.pk:
+			raise ValueError('Cannot exchange a coupon with itself.')
+
+		self_original_student = self.student
+		self_original_hostel_id = self.hostel_id
+		self_original_coupon_id = self.coupon_id
+
+		other_original_student = other_coupon.student
+		other_original_hostel_id = other_coupon.hostel_id
+		other_original_coupon_id = other_coupon.coupon_id
+
+		self.coupon_id = f'tmp-{uuid.uuid4().hex}'
+		self.hostel_id = f'tmp-{uuid.uuid4().hex}'
+		self.save(update_fields=['coupon_id', 'hostel_id'])
+
+		other_coupon.student = self_original_student
+		other_coupon.hostel_id = self_original_hostel_id
+		other_coupon.coupon_id = self_original_coupon_id
+		other_coupon.rotate_qr()
+		other_coupon.save()
+		other_coupon.ensure_qr_image()
+		other_coupon.save(update_fields=['qr_payload', 'qr_image'])
+
+		self.student = other_original_student
+		self.hostel_id = other_original_hostel_id
+		self.coupon_id = other_original_coupon_id
+		self.rotate_qr()
+		self.save()
+		self.ensure_qr_image()
+		self.save(update_fields=['qr_payload', 'qr_image'])
+
+	def build_valid_till(self):
+		meal_time = self.VALID_TILL_BY_MEAL.get(self.coupon_meal)
+		if meal_time is None:
+			raise ValueError('Invalid coupon meal for valid_till calculation.')
+
+		ist = ZoneInfo('Asia/Kolkata')
+		return datetime.combine(self.coupon_date, meal_time, tzinfo=ist)
 
 	def generate_qr_image(self):
 		qr = qrcode.QRCode(version=1, box_size=10, border=4)
@@ -216,6 +275,7 @@ class Coupon(models.Model):
 
 	def save(self, *args, **kwargs):
 		self.qr_payload = self.build_qr_payload()
+		self.valid_till = self.build_valid_till()
 		super().save(*args, **kwargs)
 
 	def rotate_qr(self):
@@ -250,6 +310,26 @@ class Coupon(models.Model):
 
 		return created_count
 
+	@classmethod
+	def create_daily_coupons_for_student(cls, student, coupon_date=None):
+		coupon_date = coupon_date or timezone.localdate()
+		created_count = 0
+
+		for meal_code, _ in CouponMeal.choices:
+			_, created = cls.objects.get_or_create(
+				student=student,
+				hostel_id=student.hostel_id,
+				coupon_meal=meal_code,
+				coupon_date=coupon_date,
+				defaults={
+					'coupon_id': cls.build_coupon_id(student, meal_code, coupon_date),
+				},
+			)
+			if created:
+				created_count += 1
+
+		return created_count
+
 
 class CouponTransferStatus(models.TextChoices):
 	PENDING = 'pending', 'Pending'
@@ -277,20 +357,22 @@ class CouponTransferRequest(models.Model):
 
 	def accept(self):
 		if self.status != CouponTransferStatus.PENDING:
-			raise ValueError('Only pending transfer requests can be accepted.')
+			raise ValueError('Only pending exchange requests can be accepted.')
 
-		self.coupon.student = self.requested_to
-		self.coupon.rotate_qr()
-		self.coupon.save()
-		self.coupon.ensure_qr_image()
-		self.coupon.save(update_fields=['qr_payload', 'qr_image'])
+		recipient_coupon = Coupon.objects.select_related('student', 'student__mess').get(
+			student=self.requested_to,
+			coupon_meal=self.coupon.coupon_meal,
+			coupon_date=self.coupon.coupon_date,
+		)
+
+		self.coupon.swap_with(recipient_coupon)
 		self.status = CouponTransferStatus.ACCEPTED
 		self.responded_at = timezone.now()
 		self.save(update_fields=['status', 'responded_at'])
 
 	def reject(self):
 		if self.status != CouponTransferStatus.PENDING:
-			raise ValueError('Only pending transfer requests can be rejected.')
+			raise ValueError('Only pending exchange requests can be rejected.')
 
 		self.status = CouponTransferStatus.REJECTED
 		self.responded_at = timezone.now()

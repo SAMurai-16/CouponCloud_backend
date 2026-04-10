@@ -1,6 +1,18 @@
 from django.contrib import admin
 
-from .models import Complaint, Coupon, Feedback, Mess, MessMenu, MessMenuItem, Staff, Student, User
+from .models import (
+	Complaint,
+	Coupon,
+	CouponTransferRequest,
+	CouponTransferStatus,
+	Feedback,
+	Mess,
+	MessMenu,
+	MessMenuItem,
+	Staff,
+	Student,
+	User,
+)
 
 
 @admin.register(User)
@@ -47,6 +59,33 @@ class ComplaintAdmin(admin.ModelAdmin):
 		'mess__hostel_id',
 		'coupon_meal',
 	)
+
+
+@admin.register(CouponTransferRequest)
+class CouponExchangeRequestAdmin(admin.ModelAdmin):
+	list_display = ('id', 'coupon', 'requested_by', 'requested_to', 'status', 'requested_at', 'responded_at')
+	search_fields = (
+		'coupon__coupon_id',
+		'coupon__student__student_id',
+		'requested_by__student_id',
+		'requested_to__student_id',
+		'message',
+	)
+	list_filter = ('status', 'requested_at', 'responded_at')
+
+	def save_model(self, request, obj, form, change):
+		if change:
+			current_obj = CouponTransferRequest.objects.select_related('coupon', 'requested_by', 'requested_to').get(pk=obj.pk)
+
+			if current_obj.status == CouponTransferStatus.PENDING and obj.status == CouponTransferStatus.ACCEPTED:
+				current_obj.accept()
+				return
+
+			if current_obj.status == CouponTransferStatus.PENDING and obj.status == CouponTransferStatus.REJECTED:
+				current_obj.reject()
+				return
+
+		super().save_model(request, obj, form, change)
 
 
 class MessMenuItemInline(admin.TabularInline):

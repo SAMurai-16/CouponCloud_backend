@@ -1,5 +1,6 @@
 from django.contrib.auth import authenticate
-from django.db import transaction
+from django.db import IntegrityError, transaction
+from zoneinfo import ZoneInfo
 from rest_framework import serializers
 
 from .models import (
@@ -38,6 +39,7 @@ class StudentSerializer(serializers.ModelSerializer):
 
 class CouponSerializer(serializers.ModelSerializer):
     qr_image_url = serializers.SerializerMethodField()
+    valid_till = serializers.SerializerMethodField()
 
     class Meta:
         model = Coupon
@@ -47,6 +49,7 @@ class CouponSerializer(serializers.ModelSerializer):
             'hostel_id',
             'coupon_meal',
             'coupon_date',
+            'valid_till',
             'qr_payload',
             'qr_image_url',
         ]
@@ -59,8 +62,14 @@ class CouponSerializer(serializers.ModelSerializer):
         url = obj.qr_image.url
         return request.build_absolute_uri(url) if request else url
 
+    def get_valid_till(self, obj):
+        if not obj.valid_till:
+            return None
 
-class CouponTransferRequestSerializer(serializers.ModelSerializer):
+        return obj.valid_till.astimezone(ZoneInfo('Asia/Kolkata')).isoformat()
+
+
+class CouponExchangeRequestSerializer(serializers.ModelSerializer):
     coupon = CouponSerializer(read_only=True)
     requested_by = StudentSerializer(read_only=True)
     requested_to = StudentSerializer(read_only=True)
@@ -79,7 +88,7 @@ class CouponTransferRequestSerializer(serializers.ModelSerializer):
         ]
 
 
-class CouponTransferCreateSerializer(serializers.Serializer):
+class CouponExchangeCreateSerializer(serializers.Serializer):
     coupon_id = serializers.CharField(max_length=50)
     requested_to_student_id = serializers.CharField(max_length=50)
     message = serializers.CharField(required=False, allow_blank=True, default='')
@@ -88,7 +97,7 @@ class CouponTransferCreateSerializer(serializers.Serializer):
         request = self.context['request']
 
         if not request.user.is_authenticated or not hasattr(request.user, 'student'):
-            raise serializers.ValidationError({'detail': 'Only authenticated students can request transfers.'})
+            raise serializers.ValidationError({'detail': 'Only authenticated students can request exchanges.'})
 
         try:
             coupon = Coupon.objects.select_related('student', 'student__mess').get(coupon_id=attrs['coupon_id'])
@@ -97,10 +106,10 @@ class CouponTransferCreateSerializer(serializers.Serializer):
 
         requester = request.user.student
         if coupon.student_id != requester.user_id:
-            raise serializers.ValidationError({'coupon_id': 'You can only transfer your own coupon.'})
+            raise serializers.ValidationError({'coupon_id': 'You can only exchange your own coupon.'})
 
         if CouponTransferRequest.objects.filter(coupon=coupon, status=CouponTransferStatus.PENDING).exists():
-            raise serializers.ValidationError({'coupon_id': 'This coupon already has a pending transfer request.'})
+            raise serializers.ValidationError({'coupon_id': 'This coupon already has a pending exchange request.'})
 
         try:
             requested_to = Student.objects.select_related('mess').get(student_id=attrs['requested_to_student_id'])
@@ -108,16 +117,28 @@ class CouponTransferCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError({'requested_to_student_id': 'Recipient student not found.'}) from exc
 
         if requested_to.user_id == requester.user_id:
-            raise serializers.ValidationError({'requested_to_student_id': 'You cannot transfer a coupon to yourself.'})
+            raise serializers.ValidationError({'requested_to_student_id': 'You cannot exchange a coupon with yourself.'})
 
-        if requested_to.mess.hostel_id != coupon.hostel_id:
+        if requested_to.mess.hostel_id == coupon.hostel_id:
             raise serializers.ValidationError(
-                {'requested_to_student_id': 'Coupon can only be transferred within the same hostel.'}
+                {'requested_to_student_id': 'Coupon exchange must be between students of different hostels.'}
             )
+
+        try:
+            requested_to_coupon = Coupon.objects.select_related('student', 'student__mess').get(
+                student=requested_to,
+                coupon_meal=coupon.coupon_meal,
+                coupon_date=coupon.coupon_date,
+            )
+        except Coupon.DoesNotExist as exc:
+            raise serializers.ValidationError(
+                {'requested_to_student_id': 'Recipient does not have a matching coupon for this meal and date.'}
+            ) from exc
 
         attrs['coupon'] = coupon
         attrs['requested_by'] = requester
         attrs['requested_to'] = requested_to
+        attrs['requested_to_coupon'] = requested_to_coupon
         return attrs
 
     @transaction.atomic
@@ -132,7 +153,7 @@ class CouponTransferCreateSerializer(serializers.Serializer):
         return transfer_request
 
 
-class CouponTransferActionSerializer(serializers.Serializer):
+class CouponExchangeActionSerializer(serializers.Serializer):
     detail = serializers.CharField(read_only=True)
 
     def validate_action(self, value):
@@ -266,6 +287,12 @@ class SignupSerializer(serializers.Serializer):
         if role == UserRole.STAFF and not attrs.get('staff_id'):
             raise serializers.ValidationError({'staff_id': 'This field is required for staff accounts.'})
 
+        if role == UserRole.STUDENT and Student.objects.filter(student_id=attrs.get('student_id')).exists():
+            raise serializers.ValidationError({'student_id': 'A student with this student_id already exists.'})
+
+        if role == UserRole.STAFF and Staff.objects.filter(staff_id=attrs.get('staff_id')).exists():
+            raise serializers.ValidationError({'staff_id': 'A staff user with this staff_id already exists.'})
+
         return attrs
 
     @transaction.atomic
@@ -276,20 +303,30 @@ class SignupSerializer(serializers.Serializer):
         staff_id = validated_data.pop('staff_id', None)
         mess = validated_data.pop('hostel_id')
 
-        if role == UserRole.STUDENT:
-            user = Student.objects.create(
-                **validated_data,
-                student_id=student_id,
-                mess=mess,
-            )
-        elif role == UserRole.STAFF:
-            user = Staff.objects.create(
-                **validated_data,
-                staff_id=staff_id,
-                mess=mess,
-            )
-        else:
-            raise serializers.ValidationError({'role': 'Invalid role.'})
+        try:
+            if role == UserRole.STUDENT:
+                user = Student.objects.create(
+                    **validated_data,
+                    student_id=student_id,
+                    mess=mess,
+                )
+            elif role == UserRole.STAFF:
+                user = Staff.objects.create(
+                    **validated_data,
+                    staff_id=staff_id,
+                    mess=mess,
+                )
+            else:
+                raise serializers.ValidationError({'role': 'Invalid role.'})
+        except IntegrityError as exc:
+            error_message = str(exc)
+            if 'core_student.student_id' in error_message:
+                raise serializers.ValidationError({'student_id': 'A student with this student_id already exists.'}) from exc
+            if 'core_staff.staff_id' in error_message:
+                raise serializers.ValidationError({'staff_id': 'A staff user with this staff_id already exists.'}) from exc
+            if 'core_user.email' in error_message:
+                raise serializers.ValidationError({'email': 'A user with this email already exists.'}) from exc
+            raise serializers.ValidationError({'detail': 'Could not create account due to a data conflict.'}) from exc
 
         user.set_password(password)
         user.save(update_fields=['password'])
@@ -319,12 +356,27 @@ class FeedbackSerializer(serializers.ModelSerializer):
         source='raised_by', queryset=User.objects.all(), write_only=True
     )
 
+    def validate(self, attrs):
+        raised_by = attrs.get('raised_by')
+
+        if hasattr(raised_by, 'student'):
+            attrs['hostel_id'] = raised_by.student.hostel_id
+        elif hasattr(raised_by, 'staff'):
+            attrs['hostel_id'] = raised_by.staff.hostel_id
+        else:
+            raise serializers.ValidationError(
+                {'raised_by_id': 'Selected user must be linked to a mess.'}
+            )
+
+        return attrs
+
     class Meta:
         model = Feedback
         fields = [
             'id',
             'raised_by',
             'raised_by_id',
+            'hostel_id',
             'coupon_meal',
             'rating',
             'description',

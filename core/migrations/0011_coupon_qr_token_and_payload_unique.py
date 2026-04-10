@@ -5,6 +5,22 @@ import uuid
 from django.db import migrations, models
 
 
+def populate_unique_qr_tokens(apps, schema_editor):
+    Coupon = apps.get_model('core', 'Coupon')
+
+    used_tokens = set(
+        Coupon.objects.exclude(qr_token__isnull=True).values_list('qr_token', flat=True)
+    )
+
+    for coupon in Coupon.objects.filter(qr_token__isnull=True).iterator():
+        token = uuid.uuid4()
+        while token in used_tokens:
+            token = uuid.uuid4()
+        coupon.qr_token = token
+        coupon.save(update_fields=['qr_token'])
+        used_tokens.add(token)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -13,6 +29,15 @@ class Migration(migrations.Migration):
 
     operations = [
         migrations.AddField(
+            model_name='coupon',
+            name='qr_token',
+            field=models.UUIDField(blank=True, editable=False, null=True),
+        ),
+        migrations.RunPython(
+            code=populate_unique_qr_tokens,
+            reverse_code=migrations.RunPython.noop,
+        ),
+        migrations.AlterField(
             model_name='coupon',
             name='qr_token',
             field=models.UUIDField(default=uuid.uuid4, editable=False, unique=True),

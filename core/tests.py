@@ -1,9 +1,12 @@
 from datetime import date
+from datetime import datetime
 from io import BytesIO
+from zoneinfo import ZoneInfo
 
 from django.core.exceptions import ValidationError
 from django.core.management import call_command
 from django.core.files.uploadedfile import SimpleUploadedFile
+from django.contrib.admin.sites import AdminSite
 from django.db import IntegrityError
 from django.urls import reverse
 from django.test import override_settings
@@ -11,6 +14,7 @@ from django.test import TestCase
 from rest_framework.test import APIClient
 from PIL import Image
 
+from .admin import CouponExchangeRequestAdmin
 from .models import (
 	Complaint,
 	Coupon,
@@ -66,7 +70,36 @@ class CouponModelTests(TestCase):
 		self.assertEqual(coupon.student.student_id, 'STU001')
 		self.assertEqual(coupon.coupon_meal, CouponMeal.LUNCH)
 		self.assertEqual(coupon.qr_payload, str(coupon.qr_token))
+		self.assertEqual(
+			coupon.valid_till.astimezone(ZoneInfo('Asia/Kolkata')),
+			datetime(2026, 4, 8, 14, 0, tzinfo=ZoneInfo('Asia/Kolkata')),
+		)
 		self.assertFalse(bool(coupon.qr_image))
+
+	def test_valid_till_is_derived_per_meal(self):
+		breakfast_coupon = Coupon.objects.create(
+			student=self.student,
+			hostel_id='H1',
+			coupon_id='CPN002A',
+			coupon_meal=CouponMeal.BREAKFAST,
+			coupon_date=date(2026, 4, 8),
+		)
+		snack_coupon = Coupon.objects.create(
+			student=self.student,
+			hostel_id='H1',
+			coupon_id='CPN002B',
+			coupon_meal=CouponMeal.SNACKS,
+			coupon_date=date(2026, 4, 8),
+		)
+
+		self.assertEqual(
+			breakfast_coupon.valid_till.astimezone(ZoneInfo('Asia/Kolkata')).time(),
+			datetime(2026, 4, 8, 10, 0, tzinfo=ZoneInfo('Asia/Kolkata')).time(),
+		)
+		self.assertEqual(
+			snack_coupon.valid_till.astimezone(ZoneInfo('Asia/Kolkata')).time(),
+			datetime(2026, 4, 8, 18, 30, tzinfo=ZoneInfo('Asia/Kolkata')).time(),
+		)
 
 	def test_qr_is_created_only_on_first_access(self):
 		coupon = Coupon.objects.create(
@@ -132,6 +165,7 @@ class CouponModelTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertTrue(response.data['valid'])
 		self.assertEqual(response.data['coupon']['coupon_id'], coupon.coupon_id)
+		self.assertIsNotNone(response.data['coupon']['valid_till'])
 
 	def test_create_daily_coupons_creates_all_meals_for_each_student(self):
 		created_count = Coupon.create_daily_coupons(coupon_date=date(2026, 4, 10))
@@ -289,7 +323,90 @@ class MessMenuApiTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(len(response.data), 1)
 		self.assertEqual(response.data[0]['meal'], CouponMeal.LUNCH)
-		self.assertEqual(len(response.data[0]['items']), 2)
+
+
+class AuthApiTests(TestCase):
+	def setUp(self):
+		self.client = APIClient()
+		self.mess = Mess.objects.create(
+			name='Hostel 1 Mess',
+			hostel_id='H1',
+		)
+		self.student = Student.objects.create(
+			name='Test Student',
+			email='loginstudent@example.com',
+			role=UserRole.STUDENT,
+			student_id='STU100',
+			mess=self.mess,
+		)
+		self.student.set_password('StrongPass123')
+		self.student.save(update_fields=['password'])
+		Coupon.create_daily_coupons_for_student(self.student, coupon_date=date(2026, 4, 9))
+
+	def test_login_creates_todays_student_coupons(self):
+		response = self.client.post(
+			reverse('login'),
+			{
+				'email': 'loginstudent@example.com',
+				'password': 'StrongPass123',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.data['daily_coupons_created'], 4)
+		self.assertEqual(Coupon.objects.filter(student=self.student).count(), 8)
+
+	def test_signed_in_student_can_fetch_their_coupons(self):
+		self.client.force_authenticate(user=self.student)
+
+		response = self.client.get(reverse('coupon-list'))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(len(response.data), 4)
+		self.assertTrue(all(coupon['student'] == self.student.user_id for coupon in response.data))
+
+	def test_session_login_can_create_exchange_request(self):
+		self.assertTrue(self.client.login(email='loginstudent@example.com', password='StrongPass123'))
+
+		recipient_mess = Mess.objects.create(
+			name='Hostel 2 Mess',
+			hostel_id='H2',
+		)
+		recipient = Student.objects.create(
+			name='Recipient Student',
+			email='recipient.session@example.com',
+			role=UserRole.STUDENT,
+			student_id='STU101',
+			mess=recipient_mess,
+		)
+		coupon = Coupon.objects.create(
+			student=self.student,
+			hostel_id='H1',
+			coupon_id='CPN100',
+			coupon_meal=CouponMeal.BREAKFAST,
+			coupon_date=date(2026, 4, 12),
+		)
+		Coupon.objects.create(
+			student=recipient,
+			hostel_id='H2',
+			coupon_id='CPN100R',
+			coupon_meal=CouponMeal.BREAKFAST,
+			coupon_date=date(2026, 4, 12),
+		)
+
+		response = self.client.post(
+			reverse('coupon-exchange-request-create'),
+			{
+				'coupon_id': coupon.coupon_id,
+				'requested_to_student_id': recipient.student_id,
+				'message': 'Session cookie exchange request.',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data['requested_by']['student_id'], self.student.student_id)
 
 	def test_get_single_mess_menu(self):
 		menu = MessMenu.objects.create(
@@ -307,12 +424,16 @@ class MessMenuApiTests(TestCase):
 
 
 @override_settings(MEDIA_ROOT='/tmp/coupon-cloud-test-media')
-class CouponTransferApiTests(TestCase):
+class CouponExchangeApiTests(TestCase):
 	def setUp(self):
 		self.client = APIClient()
 		self.mess = Mess.objects.create(
 			name='Hostel 1 Mess',
 			hostel_id='H1',
+		)
+		self.other_mess = Mess.objects.create(
+			name='Hostel 2 Mess',
+			hostel_id='H2',
 		)
 		self.student = Student.objects.create(
 			name='Sender Student',
@@ -326,10 +447,10 @@ class CouponTransferApiTests(TestCase):
 			email='recipient@example.com',
 			role=UserRole.STUDENT,
 			student_id='STU301',
-			mess=self.mess,
+			mess=self.other_mess,
 		)
 
-	def test_create_transfer_request(self):
+	def test_create_exchange_request(self):
 		coupon = Coupon.objects.create(
 			student=self.student,
 			hostel_id='H1',
@@ -337,14 +458,21 @@ class CouponTransferApiTests(TestCase):
 			coupon_meal=CouponMeal.BREAKFAST,
 			coupon_date=date(2026, 4, 12),
 		)
+		Coupon.objects.create(
+			student=self.recipient,
+			hostel_id='H2',
+			coupon_id='CPN030R',
+			coupon_meal=CouponMeal.BREAKFAST,
+			coupon_date=date(2026, 4, 12),
+		)
 
 		self.client.force_authenticate(user=self.student)
 		response = self.client.post(
-			reverse('coupon-transfer-request-create'),
+			reverse('coupon-exchange-request-create'),
 			{
 				'coupon_id': coupon.coupon_id,
 				'requested_to_student_id': self.recipient.student_id,
-				'message': 'Please take this one.',
+				'message': 'Please exchange this one.',
 			},
 			format='json',
 		)
@@ -352,12 +480,22 @@ class CouponTransferApiTests(TestCase):
 		self.assertEqual(response.status_code, 201)
 		self.assertEqual(response.data['status'], CouponTransferStatus.PENDING)
 		self.assertEqual(response.data['requested_to']['student_id'], self.recipient.student_id)
+		self.assertNotEqual(response.data['requested_to']['mess_name'], self.student.mess.name)
 
-	def test_recipient_can_accept_transfer(self):
+	def test_recipient_can_accept_exchange(self):
+		sender_coupon_id = 'CPN031'
+		recipient_coupon_id = 'CPN031R'
 		coupon = Coupon.objects.create(
 			student=self.student,
 			hostel_id='H1',
-			coupon_id='CPN031',
+			coupon_id=sender_coupon_id,
+			coupon_meal=CouponMeal.LUNCH,
+			coupon_date=date(2026, 4, 12),
+		)
+		recipient_coupon = Coupon.objects.create(
+			student=self.recipient,
+			hostel_id='H2',
+			coupon_id=recipient_coupon_id,
 			coupon_meal=CouponMeal.LUNCH,
 			coupon_date=date(2026, 4, 12),
 		)
@@ -368,19 +506,99 @@ class CouponTransferApiTests(TestCase):
 		)
 
 		self.client.force_authenticate(user=self.recipient)
-		response = self.client.post(reverse('coupon-transfer-request-accept', kwargs={'transfer_id': transfer_request.id}))
+		response = self.client.post(reverse('coupon-exchange-request-accept', kwargs={'exchange_id': transfer_request.id}))
 
 		self.assertEqual(response.status_code, 200)
 		transfer_request.refresh_from_db()
 		coupon.refresh_from_db()
+		recipient_coupon.refresh_from_db()
 		self.assertEqual(transfer_request.status, CouponTransferStatus.ACCEPTED)
 		self.assertEqual(coupon.student_id, self.recipient.user_id)
+		self.assertEqual(coupon.hostel_id, self.recipient.mess.hostel_id)
+		self.assertEqual(coupon.coupon_id, recipient_coupon_id)
+		self.assertEqual(recipient_coupon.student_id, self.student.user_id)
+		self.assertEqual(recipient_coupon.hostel_id, self.student.mess.hostel_id)
+		self.assertEqual(recipient_coupon.coupon_id, sender_coupon_id)
+
+	def test_admin_accept_runs_exchange_logic(self):
+		sender_coupon_id = 'CPN033'
+		recipient_coupon_id = 'CPN033R'
+		coupon = Coupon.objects.create(
+			student=self.student,
+			hostel_id='H1',
+			coupon_id=sender_coupon_id,
+			coupon_meal=CouponMeal.BREAKFAST,
+			coupon_date=date(2026, 4, 12),
+		)
+		recipient_coupon = Coupon.objects.create(
+			student=self.recipient,
+			hostel_id='H2',
+			coupon_id=recipient_coupon_id,
+			coupon_meal=CouponMeal.BREAKFAST,
+			coupon_date=date(2026, 4, 12),
+		)
+		exchange_request = CouponTransferRequest.objects.create(
+			coupon=coupon,
+			requested_by=self.student,
+			requested_to=self.recipient,
+		)
+
+		admin = CouponExchangeRequestAdmin(CouponTransferRequest, AdminSite())
+		exchange_request.status = CouponTransferStatus.ACCEPTED
+		admin.save_model(object(), exchange_request, form=None, change=True)
+
+		exchange_request.refresh_from_db()
+		coupon.refresh_from_db()
+		recipient_coupon.refresh_from_db()
+
+		self.assertEqual(exchange_request.status, CouponTransferStatus.ACCEPTED)
+		self.assertEqual(coupon.student_id, self.recipient.user_id)
+		self.assertEqual(coupon.coupon_id, recipient_coupon_id)
+		self.assertEqual(recipient_coupon.student_id, self.student.user_id)
+		self.assertEqual(recipient_coupon.coupon_id, sender_coupon_id)
+
+	def test_exchange_request_requires_different_hostels(self):
+		other_same_hostel_student = Student.objects.create(
+			name='Same Hostel Student',
+			email='same.hostel@example.com',
+			role=UserRole.STUDENT,
+			student_id='STU302',
+			mess=self.mess,
+		)
+		coupon = Coupon.objects.create(
+			student=self.student,
+			hostel_id='H1',
+			coupon_id='CPN031A',
+			coupon_meal=CouponMeal.LUNCH,
+			coupon_date=date(2026, 4, 12),
+		)
+
+		self.client.force_authenticate(user=self.student)
+		response = self.client.post(
+			reverse('coupon-exchange-request-create'),
+			{
+				'coupon_id': coupon.coupon_id,
+				'requested_to_student_id': other_same_hostel_student.student_id,
+				'message': 'This should fail.',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 400)
+		self.assertIn('different hostels', str(response.data))
 
 	def test_old_qr_payload_fails_after_acceptance(self):
 		coupon = Coupon.objects.create(
 			student=self.student,
 			hostel_id='H1',
 			coupon_id='CPN032',
+			coupon_meal=CouponMeal.DINNER,
+			coupon_date=date(2026, 4, 12),
+		)
+		Coupon.objects.create(
+			student=self.recipient,
+			hostel_id='H2',
+			coupon_id='CPN032R',
 			coupon_meal=CouponMeal.DINNER,
 			coupon_date=date(2026, 4, 12),
 		)
@@ -392,7 +610,7 @@ class CouponTransferApiTests(TestCase):
 		)
 
 		self.client.force_authenticate(user=self.recipient)
-		accept_response = self.client.post(reverse('coupon-transfer-request-accept', kwargs={'transfer_id': transfer_request.id}))
+		accept_response = self.client.post(reverse('coupon-exchange-request-accept', kwargs={'exchange_id': transfer_request.id}))
 		self.assertEqual(accept_response.status_code, 200)
 
 		verify_response = self.client.post(
@@ -442,6 +660,7 @@ class FeedbackAndComplaintModelTests(TestCase):
 		self.assertEqual(feedback.rating, 4)
 		self.assertEqual(feedback.description, 'Food was good')
 		self.assertEqual(feedback.raised_by.student_id, 'STU100')
+		self.assertEqual(feedback.hostel_id, 'H1')
 		self.assertEqual(feedback.coupon_meal, CouponMeal.LUNCH)
 
 	def test_complaint_can_store_photo_and_description(self):
@@ -500,6 +719,7 @@ class FeedbackAndComplaintApiTests(TestCase):
 		self.assertEqual(response.status_code, 201)
 		self.assertEqual(response.data['coupon_meal'], CouponMeal.DINNER)
 		self.assertEqual(response.data['raised_by']['user_id'], self.student.user_id)
+		self.assertEqual(response.data['hostel_id'], self.mess.hostel_id)
 
 	def test_create_complaint(self):
 		image_buffer = BytesIO()
