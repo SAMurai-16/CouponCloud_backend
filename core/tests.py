@@ -514,11 +514,11 @@ class CouponExchangeApiTests(TestCase):
 		recipient_coupon.refresh_from_db()
 		self.assertEqual(transfer_request.status, CouponTransferStatus.ACCEPTED)
 		self.assertEqual(coupon.student_id, self.recipient.user_id)
-		self.assertEqual(coupon.hostel_id, self.recipient.mess.hostel_id)
-		self.assertEqual(coupon.coupon_id, recipient_coupon_id)
+		self.assertEqual(coupon.hostel_id, self.student.mess.hostel_id)
+		self.assertEqual(coupon.coupon_id, sender_coupon_id)
 		self.assertEqual(recipient_coupon.student_id, self.student.user_id)
-		self.assertEqual(recipient_coupon.hostel_id, self.student.mess.hostel_id)
-		self.assertEqual(recipient_coupon.coupon_id, sender_coupon_id)
+		self.assertEqual(recipient_coupon.hostel_id, self.recipient.mess.hostel_id)
+		self.assertEqual(recipient_coupon.coupon_id, recipient_coupon_id)
 
 	def test_admin_accept_runs_exchange_logic(self):
 		sender_coupon_id = 'CPN033'
@@ -553,9 +553,9 @@ class CouponExchangeApiTests(TestCase):
 
 		self.assertEqual(exchange_request.status, CouponTransferStatus.ACCEPTED)
 		self.assertEqual(coupon.student_id, self.recipient.user_id)
-		self.assertEqual(coupon.coupon_id, recipient_coupon_id)
+		self.assertEqual(coupon.coupon_id, sender_coupon_id)
 		self.assertEqual(recipient_coupon.student_id, self.student.user_id)
-		self.assertEqual(recipient_coupon.coupon_id, sender_coupon_id)
+		self.assertEqual(recipient_coupon.coupon_id, recipient_coupon_id)
 
 	def test_exchange_request_requires_different_hostels(self):
 		other_same_hostel_student = Student.objects.create(

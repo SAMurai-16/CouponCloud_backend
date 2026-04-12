@@ -215,28 +215,16 @@ class Coupon(models.Model):
 			raise ValueError('Cannot exchange a coupon with itself.')
 
 		self_original_student = self.student
-		self_original_hostel_id = self.hostel_id
-		self_original_coupon_id = self.coupon_id
 
 		other_original_student = other_coupon.student
-		other_original_hostel_id = other_coupon.hostel_id
-		other_original_coupon_id = other_coupon.coupon_id
-
-		self.coupon_id = f'tmp-{uuid.uuid4().hex}'
-		self.hostel_id = f'tmp-{uuid.uuid4().hex}'
-		self.save(update_fields=['coupon_id', 'hostel_id'])
 
 		other_coupon.student = self_original_student
-		other_coupon.hostel_id = self_original_hostel_id
-		other_coupon.coupon_id = self_original_coupon_id
 		other_coupon.rotate_qr()
 		other_coupon.save()
 		other_coupon.ensure_qr_image()
 		other_coupon.save(update_fields=['qr_payload', 'qr_image'])
 
 		self.student = other_original_student
-		self.hostel_id = other_original_hostel_id
-		self.coupon_id = other_original_coupon_id
 		self.rotate_qr()
 		self.save()
 		self.ensure_qr_image()
