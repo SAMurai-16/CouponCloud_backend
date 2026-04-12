@@ -10,22 +10,55 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+import os
 from pathlib import Path
+
+import dj_database_url
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+
+def load_env_file(env_path):
+    if not env_path.exists():
+        return
+
+    for raw_line in env_path.read_text().splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith('#') or '=' not in line:
+            continue
+
+        key, value = line.split('=', 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
+
+
+load_env_file(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-5sv(6)knee$k0xur!4df%%3jx)&pwp&$k-%du!81ft1cp^5iht'
+SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-5sv(6)knee$k0xur!4df%%3jx)&pwp&$k-%du!81ft1cp^5iht')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', 'testserver']
+render_hostname = os.environ.get('RENDER_EXTERNAL_HOSTNAME', '')
+allowed_hosts = {'localhost', '127.0.0.1', 'testserver'}
+if render_hostname:
+    allowed_hosts.add(render_hostname)
+
+extra_allowed_hosts = {
+    host.strip()
+    for host in os.environ.get('ALLOWED_HOSTS', '').split(',')
+    if host.strip()
+}
+allowed_hosts.update(extra_allowed_hosts)
+ALLOWED_HOSTS = sorted(allowed_hosts)
 
 
 # Application definition
@@ -46,6 +79,7 @@ AUTH_USER_MODEL = 'core.User'
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -85,6 +119,14 @@ DATABASES = {
     }
 }
 
+database_url = os.environ.get('DATABASE_URL')
+if database_url:
+    DATABASES['default'] = dj_database_url.config(
+        default=database_url,
+        conn_max_age=600,
+        ssl_require=True,
+    )
+
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
@@ -121,6 +163,16 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+
+STORAGES = {
+    'default': {
+        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+    },
+}
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
@@ -131,3 +183,21 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r'^http://localhost:\d+$',
     r'^http://127\.0\.0\.1:\d+$',
 ]
+
+cors_allowed_origins = [
+    origin.strip()
+    for origin in os.environ.get('CORS_ALLOWED_ORIGINS', '').split(',')
+    if origin.strip()
+]
+if cors_allowed_origins:
+    CORS_ALLOWED_ORIGINS = cors_allowed_origins
+
+csrf_trusted_origins = [
+    origin.strip()
+    for origin in os.environ.get('CSRF_TRUSTED_ORIGINS', '').split(',')
+    if origin.strip()
+]
+if render_hostname:
+    csrf_trusted_origins.append(f'https://{render_hostname}')
+if csrf_trusted_origins:
+    CSRF_TRUSTED_ORIGINS = csrf_trusted_origins
