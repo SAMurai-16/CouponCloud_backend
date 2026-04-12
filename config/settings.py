@@ -201,3 +201,20 @@ if render_hostname:
     csrf_trusted_origins.append(f'https://{render_hostname}')
 if csrf_trusted_origins:
     CSRF_TRUSTED_ORIGINS = csrf_trusted_origins
+
+
+def env_bool(name, default):
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Cross-origin session auth needs cookies that browsers allow on requests
+# coming from a different site than the API host.
+SESSION_COOKIE_SECURE = env_bool('SESSION_COOKIE_SECURE', not DEBUG)
+CSRF_COOKIE_SECURE = env_bool('CSRF_COOKIE_SECURE', not DEBUG)
+SESSION_COOKIE_SAMESITE = os.environ.get('SESSION_COOKIE_SAMESITE', 'Lax' if DEBUG else 'None')
+CSRF_COOKIE_SAMESITE = os.environ.get('CSRF_COOKIE_SAMESITE', 'Lax' if DEBUG else 'None')
