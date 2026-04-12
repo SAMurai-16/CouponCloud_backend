@@ -334,17 +334,22 @@ class SignupSerializer(serializers.Serializer):
 
 
 class LoginSerializer(serializers.Serializer):
-    email = serializers.EmailField()
+    student_id = serializers.CharField(max_length=50)
     password = serializers.CharField(write_only=True)
 
     def validate(self, attrs):
+        try:
+            student = Student.objects.get(student_id=attrs['student_id'])
+        except Student.DoesNotExist as exc:
+            raise serializers.ValidationError({'detail': 'Invalid student ID or password.'}) from exc
+
         user = authenticate(
             request=self.context.get('request'),
-            email=attrs['email'],
+            email=student.email,
             password=attrs['password'],
         )
         if user is None:
-            raise serializers.ValidationError({'detail': 'Invalid email or password.'})
+            raise serializers.ValidationError({'detail': 'Invalid student ID or password.'})
 
         attrs['user'] = user
         return attrs

@@ -347,7 +347,7 @@ class AuthApiTests(TestCase):
 		response = self.client.post(
 			reverse('login'),
 			{
-				'email': 'loginstudent@example.com',
+				'student_id': 'STU100',
 				'password': 'StrongPass123',
 			},
 			format='json',
@@ -356,6 +356,19 @@ class AuthApiTests(TestCase):
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.data['daily_coupons_created'], 4)
 		self.assertEqual(Coupon.objects.filter(student=self.student).count(), 8)
+
+	def test_login_rejects_unknown_student_id(self):
+		response = self.client.post(
+			reverse('login'),
+			{
+				'student_id': 'UNKNOWN',
+				'password': 'StrongPass123',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 400)
+		self.assertEqual(response.data['detail'][0], 'Invalid student ID or password.')
 
 	def test_signed_in_student_can_fetch_their_coupons(self):
 		self.client.force_authenticate(user=self.student)

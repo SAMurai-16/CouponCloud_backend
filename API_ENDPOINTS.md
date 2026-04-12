@@ -54,7 +54,7 @@ Auth model:
 
 ```json
 {
-  "email": "rahul@example.com",
+  "student_id": "STU1001",
   "password": "StrongPass123"
 }
 ```
