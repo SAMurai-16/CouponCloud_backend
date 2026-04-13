@@ -201,7 +201,17 @@ class PrivateQrSupabaseStorage(BaseSupabaseStorage):
 
         if signed_url.startswith("http://") or signed_url.startswith("https://"):
             return signed_url
-        return f"{settings.SUPABASE_URL}{signed_url}"
+
+        # Supabase can return relative paths like /object/sign/... without
+        # the /storage/v1 prefix. Normalize to a full, fetchable URL.
+        if signed_url.startswith("/storage/v1/"):
+            return f"{settings.SUPABASE_URL}{signed_url}"
+        if signed_url.startswith("/object/"):
+            return f"{settings.SUPABASE_URL}/storage/v1{signed_url}"
+        if signed_url.startswith("object/"):
+            return f"{settings.SUPABASE_URL}/storage/v1/{signed_url}"
+
+        return f"{settings.SUPABASE_URL}/{signed_url.lstrip('/')}"
 
     def url(self, name):
         return self.signed_url(name)

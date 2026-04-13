@@ -116,11 +116,16 @@ class CouponListView(APIView):
         if not hasattr(request.user, 'student'):
             return Response({'detail': 'Only students have coupons.'}, status=status.HTTP_403_FORBIDDEN)
 
-        coupons = (
+        coupons = list(
             Coupon.objects.select_related('student', 'student__mess')
             .filter(student=request.user.student)
             .order_by('-coupon_date', 'coupon_meal')
         )
+
+        for coupon in coupons:
+            if not coupon.qr_image:
+                coupon.ensure_qr_image()
+
         return Response(CouponSerializer(coupons, many=True, context={'request': request}).data, status=status.HTTP_200_OK)
 
 
