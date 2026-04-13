@@ -167,7 +167,7 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 STORAGES = {
     'default': {
-        'BACKEND': 'django.core.files.storage.FileSystemStorage',
+        'BACKEND': 'core.storage.SupabaseStorage',
     },
     'staticfiles': {
         'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
@@ -176,6 +176,11 @@ STORAGES = {
 
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '').rstrip('/')
+SUPABASE_STORAGE_KEY = os.environ.get('SUPABASE_STORAGE_KEY', os.environ.get('SUPABASE_SERVICE_ROLE_KEY', ''))
+SUPABASE_STORAGE_BUCKET = os.environ.get('SUPABASE_STORAGE_BUCKET', '')
+SUPABASE_STORAGE_PATH_PREFIX = os.environ.get('SUPABASE_STORAGE_PATH_PREFIX', '')
 
 
 CORS_ALLOW_CREDENTIALS = True

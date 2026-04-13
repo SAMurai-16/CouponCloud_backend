@@ -8,6 +8,10 @@ Auth model:
 - Protected endpoint currently: `GET /coupons/`.
 - For web clients, send requests with credentials enabled so cookies are included.
 
+Media storage:
+- When `SUPABASE_URL`, `SUPABASE_STORAGE_KEY`, and `SUPABASE_STORAGE_BUCKET` are set, uploaded media files are stored in Supabase Storage.
+- Without those env vars, Django falls back to local `media/` storage.
+
 ---
 
 ## 1) Health Check

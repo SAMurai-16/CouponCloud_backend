@@ -7,3 +7,4 @@ Pillow==11.2.1
 qrcode==8.2
 whitenoise==6.9.0
 psycopg2-binary==2.9.10
+supabase>=2,<3
