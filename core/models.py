@@ -286,7 +286,7 @@ class Coupon(models.Model):
 
 		for student in Student.objects.all().order_by('student_id'):
 			for meal_code, _ in CouponMeal.choices:
-				coupon, created = cls.objects.get_or_create(
+				_, created = cls.objects.get_or_create(
 					student=student,
 					hostel_id=student.hostel_id,
 					coupon_meal=meal_code,
@@ -297,8 +297,6 @@ class Coupon(models.Model):
 				)
 				if created:
 					created_count += 1
-				if not coupon.qr_image:
-					coupon.ensure_qr_image()
 
 		return created_count
 
@@ -308,7 +306,7 @@ class Coupon(models.Model):
 		created_count = 0
 
 		for meal_code, _ in CouponMeal.choices:
-			coupon, created = cls.objects.get_or_create(
+			_, created = cls.objects.get_or_create(
 				student=student,
 				hostel_id=student.hostel_id,
 				coupon_meal=meal_code,
@@ -319,8 +317,6 @@ class Coupon(models.Model):
 			)
 			if created:
 				created_count += 1
-			if not coupon.qr_image:
-				coupon.ensure_qr_image()
 
 		return created_count
 
