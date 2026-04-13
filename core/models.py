@@ -192,7 +192,7 @@ class Coupon(models.Model):
 	valid_till = models.DateTimeField(null=True, blank=True)
 	qr_token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
 	qr_payload = models.TextField(blank=True)
-	qr_image = models.ImageField(upload_to='coupon_qr/', blank=True, storage=private_qr_storage)
+	qr_image = models.ImageField(upload_to='', blank=True, storage=private_qr_storage)
 
 	VALID_TILL_BY_MEAL = {
 		CouponMeal.BREAKFAST: time(hour=10, minute=0),
