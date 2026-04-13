@@ -167,7 +167,7 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 
 STORAGES = {
     'default': {
-        'BACKEND': 'core.storage.SupabaseStorage',
+        'BACKEND': 'core.storage.PublicSupabaseStorage',
     },
     'staticfiles': {
         'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
@@ -179,8 +179,11 @@ MEDIA_ROOT = BASE_DIR / 'media'
 
 SUPABASE_URL = os.environ.get('SUPABASE_URL', '').rstrip('/')
 SUPABASE_STORAGE_KEY = os.environ.get('SUPABASE_STORAGE_KEY', os.environ.get('SUPABASE_SERVICE_ROLE_KEY', ''))
-SUPABASE_STORAGE_BUCKET = os.environ.get('SUPABASE_STORAGE_BUCKET', '')
-SUPABASE_STORAGE_PATH_PREFIX = os.environ.get('SUPABASE_STORAGE_PATH_PREFIX', '')
+SUPABASE_PUBLIC_BUCKET = os.environ.get('SUPABASE_PUBLIC_BUCKET', os.environ.get('SUPABASE_STORAGE_BUCKET', ''))
+SUPABASE_PUBLIC_PATH_PREFIX = os.environ.get('SUPABASE_PUBLIC_PATH_PREFIX', os.environ.get('SUPABASE_STORAGE_PATH_PREFIX', ''))
+SUPABASE_QR_BUCKET = os.environ.get('SUPABASE_QR_BUCKET', '')
+SUPABASE_QR_PATH_PREFIX = os.environ.get('SUPABASE_QR_PATH_PREFIX', '')
+SUPABASE_QR_SIGNED_URL_TTL = int(os.environ.get('SUPABASE_QR_SIGNED_URL_TTL', '300'))
 
 
 CORS_ALLOW_CREDENTIALS = True

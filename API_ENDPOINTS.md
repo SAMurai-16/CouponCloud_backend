@@ -9,7 +9,9 @@ Auth model:
 - For web clients, send requests with credentials enabled so cookies are included.
 
 Media storage:
-- When `SUPABASE_URL`, `SUPABASE_STORAGE_KEY`, and `SUPABASE_STORAGE_BUCKET` are set, uploaded media files are stored in Supabase Storage.
+- Complaint photos use the public bucket configured by `SUPABASE_PUBLIC_BUCKET`.
+- Coupon QR images use the private bucket configured by `SUPABASE_QR_BUCKET` and are returned as short-lived signed URLs.
+- `SUPABASE_STORAGE_KEY` should be your server-side Supabase secret key on Render.
 - Without those env vars, Django falls back to local `media/` storage.
 
 ---

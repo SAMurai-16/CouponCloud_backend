@@ -1,3 +1,4 @@
+import json
 import mimetypes
 import os
 import posixpath
@@ -13,36 +14,46 @@ from django.utils.deconstruct import deconstructible
 
 
 @deconstructible
-class SupabaseStorage(Storage):
+class BaseSupabaseStorage(Storage):
+    bucket_setting = ""
+    path_prefix_setting = ""
+    public = True
+
     def __init__(self):
         self.local_storage = FileSystemStorage(location=settings.MEDIA_ROOT, base_url=settings.MEDIA_URL)
 
     @property
+    def bucket_name(self):
+        return getattr(settings, self.bucket_setting, "")
+
+    @property
+    def path_prefix(self):
+        return getattr(settings, self.path_prefix_setting, "").strip("/")
+
+    @property
     def enabled(self):
-        return bool(
-            settings.SUPABASE_URL
-            and settings.SUPABASE_STORAGE_KEY
-            and settings.SUPABASE_STORAGE_BUCKET
-        )
+        return bool(settings.SUPABASE_URL and settings.SUPABASE_STORAGE_KEY and self.bucket_name)
 
     def _clean_name(self, name):
         normalized = str(name).replace("\\", "/").lstrip("/")
-        prefix = settings.SUPABASE_STORAGE_PATH_PREFIX.strip("/")
-        if prefix:
-            normalized = posixpath.join(prefix, normalized)
+        if self.path_prefix:
+            normalized = posixpath.join(self.path_prefix, normalized)
         return normalized
 
     def _public_url(self, name):
         quoted_name = quote(name, safe="/")
-        return (
-            f"{settings.SUPABASE_URL}/storage/v1/object/public/"
-            f"{settings.SUPABASE_STORAGE_BUCKET}/{quoted_name}"
-        )
+        quoted_bucket = quote(self.bucket_name, safe="")
+        return f"{settings.SUPABASE_URL}/storage/v1/object/public/{quoted_bucket}/{quoted_name}"
 
     def _object_url(self, name):
-        quoted_bucket = quote(settings.SUPABASE_STORAGE_BUCKET, safe="")
+        quoted_bucket = quote(self.bucket_name, safe="")
         quoted_name = quote(name, safe="/")
         return f"{settings.SUPABASE_URL}/storage/v1/object/{quoted_bucket}/{quoted_name}"
+
+    def _request(self, method, url, *, data=None, headers=None, timeout=30):
+        request = Request(url, data=data, method=method, headers=headers or {})
+        with urlopen(request, timeout=timeout) as response:
+            return response.read()
 
     def _save(self, name, content):
         if not self.enabled:
@@ -53,10 +64,10 @@ class SupabaseStorage(Storage):
         payload = content.read()
         content_type = getattr(content, "content_type", None) or mimetypes.guess_type(clean_name)[0] or "application/octet-stream"
         try:
-            request = Request(
+            self._request(
+                "POST",
                 self._object_url(clean_name),
                 data=payload,
-                method="POST",
                 headers={
                     "apikey": settings.SUPABASE_STORAGE_KEY,
                     "Authorization": f"Bearer {settings.SUPABASE_STORAGE_KEY}",
@@ -64,18 +75,13 @@ class SupabaseStorage(Storage):
                     "x-upsert": "false",
                 },
             )
-            with urlopen(request, timeout=30) as response:
-                response.read()
         except HTTPError as exc:
             raise ImproperlyConfigured(
-                f"Supabase Storage upload failed with HTTP {exc.code}. "
-                "Check SUPABASE_URL, SUPABASE_STORAGE_KEY, SUPABASE_STORAGE_BUCKET, "
-                "bucket visibility, and Render deploy logs."
+                f"Supabase Storage upload failed with HTTP {exc.code} for bucket '{self.bucket_name}'."
             ) from exc
         except URLError as exc:
             raise ImproperlyConfigured(
-                "Supabase Storage upload failed due to a network error. "
-                "Check outbound network access and SUPABASE_URL."
+                f"Supabase Storage upload failed for bucket '{self.bucket_name}' due to a network error."
             ) from exc
         return clean_name
 
@@ -87,18 +93,15 @@ class SupabaseStorage(Storage):
             self.local_storage.delete(name)
             return
 
-        clean_name = self._clean_name(name)
-        request = Request(
-            self._object_url(clean_name),
-            method="DELETE",
-            headers={
-                "apikey": settings.SUPABASE_STORAGE_KEY,
-                "Authorization": f"Bearer {settings.SUPABASE_STORAGE_KEY}",
-            },
-        )
         try:
-            with urlopen(request, timeout=30) as response:
-                response.read()
+            self._request(
+                "DELETE",
+                self._object_url(self._clean_name(name)),
+                headers={
+                    "apikey": settings.SUPABASE_STORAGE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_STORAGE_KEY}",
+                },
+            )
         except Exception:
             return
 
@@ -144,3 +147,65 @@ class SupabaseStorage(Storage):
         if not self.enabled:
             return self.local_storage.url(name)
         return self._public_url(self._clean_name(name))
+
+
+@deconstructible
+class PublicSupabaseStorage(BaseSupabaseStorage):
+    bucket_setting = "SUPABASE_PUBLIC_BUCKET"
+    path_prefix_setting = "SUPABASE_PUBLIC_PATH_PREFIX"
+    public = True
+
+
+@deconstructible
+class PrivateQrSupabaseStorage(BaseSupabaseStorage):
+    bucket_setting = "SUPABASE_QR_BUCKET"
+    path_prefix_setting = "SUPABASE_QR_PATH_PREFIX"
+    public = False
+
+    def signed_url(self, name, expires_in=None):
+        if not name:
+            return ""
+        if not self.enabled:
+            return self.local_storage.url(name)
+
+        clean_name = self._clean_name(name)
+        expires_in = expires_in or settings.SUPABASE_QR_SIGNED_URL_TTL
+        quoted_bucket = quote(self.bucket_name, safe="")
+        quoted_name = quote(clean_name, safe="/")
+        sign_url = f"{settings.SUPABASE_URL}/storage/v1/object/sign/{quoted_bucket}/{quoted_name}"
+
+        try:
+            raw_response = self._request(
+                "POST",
+                sign_url,
+                data=json.dumps({"expiresIn": int(expires_in)}).encode("utf-8"),
+                headers={
+                    "apikey": settings.SUPABASE_STORAGE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_STORAGE_KEY}",
+                    "Content-Type": "application/json",
+                },
+            )
+        except HTTPError as exc:
+            raise ImproperlyConfigured(
+                f"Supabase signed URL generation failed with HTTP {exc.code} for bucket '{self.bucket_name}'."
+            ) from exc
+        except URLError as exc:
+            raise ImproperlyConfigured(
+                f"Supabase signed URL generation failed for bucket '{self.bucket_name}' due to a network error."
+            ) from exc
+
+        payload = json.loads(raw_response.decode("utf-8"))
+        signed_url = payload.get("signedURL") or payload.get("signedUrl")
+        if not signed_url:
+            raise ImproperlyConfigured("Supabase signed URL response did not include a signed URL.")
+
+        if signed_url.startswith("http://") or signed_url.startswith("https://"):
+            return signed_url
+        return f"{settings.SUPABASE_URL}{signed_url}"
+
+    def url(self, name):
+        return self.signed_url(name)
+
+
+public_media_storage = PublicSupabaseStorage()
+private_qr_storage = PrivateQrSupabaseStorage()

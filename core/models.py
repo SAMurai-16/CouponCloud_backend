@@ -12,6 +12,8 @@ from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 
+from .storage import private_qr_storage, public_media_storage
+
 
 class UserRole(models.TextChoices):
 	STUDENT = 'student', 'Student'
@@ -174,7 +176,7 @@ class Complaint(models.Model):
 	mess = models.ForeignKey(Mess, on_delete=models.PROTECT, related_name='complaints')
 	coupon_meal = models.CharField(max_length=1, choices=CouponMeal.choices)
 	complaint_type = models.CharField(max_length=100)
-	photo = models.ImageField(upload_to='complaints/')
+	photo = models.ImageField(upload_to='complaints/', storage=public_media_storage)
 	description = models.TextField()
 
 	def __str__(self):
@@ -190,7 +192,7 @@ class Coupon(models.Model):
 	valid_till = models.DateTimeField(null=True, blank=True)
 	qr_token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
 	qr_payload = models.TextField(blank=True)
-	qr_image = models.ImageField(upload_to='coupon_qr/', blank=True)
+	qr_image = models.ImageField(upload_to='coupon_qr/', blank=True, storage=private_qr_storage)
 
 	VALID_TILL_BY_MEAL = {
 		CouponMeal.BREAKFAST: time(hour=10, minute=0),
