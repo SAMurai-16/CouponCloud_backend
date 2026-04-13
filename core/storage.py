@@ -2,16 +2,14 @@ import mimetypes
 import os
 import posixpath
 import uuid
+from urllib.error import HTTPError, URLError
 from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.core.files.storage import FileSystemStorage, Storage
 from django.utils.deconstruct import deconstructible
-
-try:
-    from supabase import create_client
-except ImportError:  # pragma: no cover - local fallback when dependency is absent
-    create_client = None
 
 
 @deconstructible
@@ -22,14 +20,10 @@ class SupabaseStorage(Storage):
     @property
     def enabled(self):
         return bool(
-            create_client
-            and settings.SUPABASE_URL
+            settings.SUPABASE_URL
             and settings.SUPABASE_STORAGE_KEY
             and settings.SUPABASE_STORAGE_BUCKET
         )
-
-    def _client(self):
-        return create_client(settings.SUPABASE_URL, settings.SUPABASE_STORAGE_KEY)
 
     def _clean_name(self, name):
         normalized = str(name).replace("\\", "/").lstrip("/")
@@ -45,6 +39,11 @@ class SupabaseStorage(Storage):
             f"{settings.SUPABASE_STORAGE_BUCKET}/{quoted_name}"
         )
 
+    def _object_url(self, name):
+        quoted_bucket = quote(settings.SUPABASE_STORAGE_BUCKET, safe="")
+        quoted_name = quote(name, safe="/")
+        return f"{settings.SUPABASE_URL}/storage/v1/object/{quoted_bucket}/{quoted_name}"
+
     def _save(self, name, content):
         if not self.enabled:
             return self.local_storage._save(name, content)
@@ -53,15 +52,31 @@ class SupabaseStorage(Storage):
         content.open("rb")
         payload = content.read()
         content_type = getattr(content, "content_type", None) or mimetypes.guess_type(clean_name)[0] or "application/octet-stream"
-
-        self._client().storage.from_(settings.SUPABASE_STORAGE_BUCKET).upload(
-            path=clean_name,
-            file=payload,
-            file_options={
-                "content-type": content_type,
-                "upsert": "false",
-            },
-        )
+        try:
+            request = Request(
+                self._object_url(clean_name),
+                data=payload,
+                method="POST",
+                headers={
+                    "apikey": settings.SUPABASE_STORAGE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_STORAGE_KEY}",
+                    "Content-Type": content_type,
+                    "x-upsert": "false",
+                },
+            )
+            with urlopen(request, timeout=30) as response:
+                response.read()
+        except HTTPError as exc:
+            raise ImproperlyConfigured(
+                f"Supabase Storage upload failed with HTTP {exc.code}. "
+                "Check SUPABASE_URL, SUPABASE_STORAGE_KEY, SUPABASE_STORAGE_BUCKET, "
+                "bucket visibility, and Render deploy logs."
+            ) from exc
+        except URLError as exc:
+            raise ImproperlyConfigured(
+                "Supabase Storage upload failed due to a network error. "
+                "Check outbound network access and SUPABASE_URL."
+            ) from exc
         return clean_name
 
     def delete(self, name):
@@ -72,7 +87,20 @@ class SupabaseStorage(Storage):
             self.local_storage.delete(name)
             return
 
-        self._client().storage.from_(settings.SUPABASE_STORAGE_BUCKET).remove([self._clean_name(name)])
+        clean_name = self._clean_name(name)
+        request = Request(
+            self._object_url(clean_name),
+            method="DELETE",
+            headers={
+                "apikey": settings.SUPABASE_STORAGE_KEY,
+                "Authorization": f"Bearer {settings.SUPABASE_STORAGE_KEY}",
+            },
+        )
+        try:
+            with urlopen(request, timeout=30) as response:
+                response.read()
+        except Exception:
+            return
 
     def exists(self, name):
         if not self.enabled:
