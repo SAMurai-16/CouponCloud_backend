@@ -778,3 +778,61 @@ class FeedbackAndComplaintApiTests(TestCase):
 		self.assertEqual(len(feedback_response.data), 1)
 		self.assertEqual(complaint_response.status_code, 200)
 		self.assertEqual(len(complaint_response.data), 1)
+
+	def test_feedback_daily_summary_returns_average_and_rating_count_per_meal(self):
+		second_mess = Mess.objects.create(
+			name='Hostel 2 Mess',
+			hostel_id='H2',
+		)
+		second_student = Student.objects.create(
+			name='Second API Student',
+			email='api.student2@example.com',
+			role=UserRole.STUDENT,
+			student_id='STU201',
+			mess=second_mess,
+		)
+
+		Feedback.objects.create(
+			raised_by=self.student,
+			coupon_meal=CouponMeal.BREAKFAST,
+			rating=4,
+			description='Nice breakfast.',
+		)
+		Feedback.objects.create(
+			raised_by=self.student,
+			coupon_meal=CouponMeal.BREAKFAST,
+			rating=2,
+			description='Average breakfast.',
+		)
+		Feedback.objects.create(
+			raised_by=second_student,
+			coupon_meal=CouponMeal.DINNER,
+			rating=5,
+			description='Great dinner.',
+		)
+
+		response = self.client.get(reverse('feedback-daily-summary'))
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(len(response.data), 2)
+
+		hostel_one_summary = next(item for item in response.data if item['hostel_id'] == 'H1')
+		breakfast_summary = next(meal for meal in hostel_one_summary['meals'] if meal['meal'] == CouponMeal.BREAKFAST)
+		lunch_summary = next(meal for meal in hostel_one_summary['meals'] if meal['meal'] == CouponMeal.LUNCH)
+
+		self.assertEqual(breakfast_summary['average_rating'], 3.0)
+		self.assertEqual(breakfast_summary['rated_count'], 2)
+		self.assertIsNone(lunch_summary['average_rating'])
+		self.assertEqual(lunch_summary['rated_count'], 0)
+
+		hostel_two_summary = next(item for item in response.data if item['hostel_id'] == 'H2')
+		dinner_summary = next(meal for meal in hostel_two_summary['meals'] if meal['meal'] == CouponMeal.DINNER)
+
+		self.assertEqual(dinner_summary['average_rating'], 5.0)
+		self.assertEqual(dinner_summary['rated_count'], 1)
+
+	def test_feedback_daily_summary_validates_date_query_param(self):
+		response = self.client.get(reverse('feedback-daily-summary'), {'date': '16-04-2026'})
+
+		self.assertEqual(response.status_code, 400)
+		self.assertIn('YYYY-MM-DD', response.data['detail'])

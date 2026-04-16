@@ -1,7 +1,9 @@
 from django.contrib.auth import login
 from django.db import transaction
+from django.db.models import Avg, Count
 from django.http import JsonResponse
 from django.shortcuts import get_object_or_404
+from django.utils import timezone
 from rest_framework import status
 from rest_framework.authentication import SessionAuthentication
 from rest_framework.permissions import AllowAny
@@ -9,7 +11,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from .models import Complaint, Coupon, CouponTransferRequest, Feedback, Mess, MessMenu, Student
+from .models import Complaint, Coupon, CouponMeal, CouponTransferRequest, Feedback, Mess, MessMenu, Student
 from .serializers import (
     AuthUserSerializer,
     ComplaintSerializer,
@@ -18,6 +20,7 @@ from .serializers import (
     CouponExchangeRequestSerializer,
     FeedbackSerializer,
     LoginSerializer,
+    MessSerializer,
     MessMenuCreateSerializer,
     MessMenuSerializer,
     SignupSerializer,
@@ -96,11 +99,14 @@ class StudentDetailView(APIView):
         return Response(StudentSerializer(student).data, status=status.HTTP_200_OK)
 
 
+
+
 class CouponQrView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
     def get(self, request, coupon_id):
+
         coupon = get_object_or_404(Coupon, coupon_id=coupon_id)
         coupon.ensure_qr_image()
         return Response(
@@ -257,6 +263,15 @@ class MessMenuDetailView(APIView):
         return Response(MessMenuSerializer(menu).data, status=status.HTTP_200_OK)
 
 
+class MessListView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        messes = Mess.objects.order_by('hostel_id', 'name')
+        return Response(MessSerializer(messes, many=True).data, status=status.HTTP_200_OK)
+
+
 class FeedbackListCreateView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
@@ -282,6 +297,64 @@ class FeedbackListCreateView(APIView):
         serializer.is_valid(raise_exception=True)
         feedback = serializer.save()
         return Response(FeedbackSerializer(feedback).data, status=status.HTTP_201_CREATED)
+
+
+class DailyMealRatingSummaryView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        date_str = request.query_params.get('date')
+
+        if date_str:
+            try:
+                target_date = timezone.datetime.strptime(date_str, '%Y-%m-%d').date()
+            except ValueError:
+                return Response(
+                    {'detail': 'date must be in YYYY-MM-DD format.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+        else:
+            target_date = timezone.localdate()
+
+        rating_rows = {
+            (row['hostel_id'], row['coupon_meal']): row
+            for row in (
+                Feedback.objects.filter(created_at__date=target_date)
+                .values('hostel_id', 'coupon_meal')
+                .annotate(
+                    average_rating=Avg('rating'),
+                    rated_count=Count('id'),
+                )
+            )
+        }
+
+        data = []
+        for mess in Mess.objects.order_by('hostel_id', 'name'):
+            meals = []
+            for meal_code, meal_label in CouponMeal.choices:
+                rating_row = rating_rows.get((mess.hostel_id, meal_code))
+                average_rating = rating_row['average_rating'] if rating_row else None
+                meals.append(
+                    {
+                        'meal': meal_code,
+                        'meal_name': meal_label,
+                        'average_rating': round(float(average_rating), 2) if average_rating is not None else None,
+                        'rated_count': rating_row['rated_count'] if rating_row else 0,
+                    }
+                )
+
+            data.append(
+                {
+                    'hostel_id': mess.hostel_id,
+                    'mess_id': mess.id,
+                    'mess_name': mess.name,
+                    'date': target_date.isoformat(),
+                    'meals': meals,
+                }
+            )
+
+        return Response(data, status=status.HTTP_200_OK)
 
 
 class ComplaintListCreateView(APIView):

@@ -158,6 +158,7 @@ class Feedback(models.Model):
 		validators=[MinValueValidator(1), MaxValueValidator(5)]
 	)
 	description = models.TextField()
+	created_at = models.DateTimeField(default=timezone.now, db_index=True)
 
 	def save(self, *args, **kwargs):
 		if not self.hostel_id and self.raised_by_id:

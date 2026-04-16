@@ -193,6 +193,11 @@ Example response:
   - `meal` (`B`, `L`, `S`, `D`)
 - Request JSON: None
 
+### `GET /mess/`
+- Auth: Not required
+- Request JSON: None
+- Response: List of all messes, including each mess's `hostel_id`
+
 ### `POST /mess-menus/`
 - Auth: Not required
 - Request JSON:
