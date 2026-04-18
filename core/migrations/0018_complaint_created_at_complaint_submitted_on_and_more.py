@@ -13,6 +13,11 @@ def backfill_feedback_submitted_on(apps, schema_editor):
     )
 
 
+def clear_existing_complaint_submitted_on(apps, schema_editor):
+    Complaint = apps.get_model('core', 'Complaint')
+    Complaint.objects.exclude(submitted_on__isnull=True).update(submitted_on=None)
+
+
 class Migration(migrations.Migration):
 
     dependencies = [
@@ -35,6 +40,7 @@ class Migration(migrations.Migration):
             name='submitted_on',
             field=models.DateField(blank=True, db_index=True, default=django.utils.timezone.localdate, null=True),
         ),
+        migrations.RunPython(clear_existing_complaint_submitted_on, migrations.RunPython.noop),
         migrations.RunPython(backfill_feedback_submitted_on, migrations.RunPython.noop),
         migrations.AddConstraint(
             model_name='complaint',
