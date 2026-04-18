@@ -159,6 +159,16 @@ class Feedback(models.Model):
 	)
 	description = models.TextField()
 	created_at = models.DateTimeField(default=timezone.now, db_index=True)
+	submitted_on = models.DateField(default=timezone.localdate, db_index=True, null=True, blank=True)
+
+	class Meta:
+		constraints = [
+			models.UniqueConstraint(
+				fields=['raised_by', 'coupon_meal', 'submitted_on'],
+				name='unique_feedback_per_user_meal_day',
+				condition=Q(submitted_on__isnull=False),
+			),
+		]
 
 	def save(self, *args, **kwargs):
 		if not self.hostel_id and self.raised_by_id:
@@ -166,6 +176,8 @@ class Feedback(models.Model):
 				self.hostel_id = self.raised_by.student.hostel_id
 			elif hasattr(self.raised_by, 'staff'):
 				self.hostel_id = self.raised_by.staff.hostel_id
+		if self.created_at and not self.submitted_on:
+			self.submitted_on = timezone.localdate(self.created_at)
 		super().save(*args, **kwargs)
 
 	def __str__(self):
@@ -179,6 +191,22 @@ class Complaint(models.Model):
 	complaint_type = models.CharField(max_length=100)
 	photo = models.ImageField(upload_to='complaints/', storage=public_media_storage)
 	description = models.TextField()
+	created_at = models.DateTimeField(default=timezone.now, db_index=True)
+	submitted_on = models.DateField(default=timezone.localdate, db_index=True, null=True, blank=True)
+
+	class Meta:
+		constraints = [
+			models.UniqueConstraint(
+				fields=['raised_by', 'coupon_meal', 'submitted_on'],
+				name='unique_complaint_per_user_meal_day',
+				condition=Q(submitted_on__isnull=False),
+			),
+		]
+
+	def save(self, *args, **kwargs):
+		if self.created_at and not self.submitted_on:
+			self.submitted_on = timezone.localdate(self.created_at)
+		super().save(*args, **kwargs)
 
 	def __str__(self):
 		return f'Complaint {self.id} - {self.coupon_meal} - {self.complaint_type}'

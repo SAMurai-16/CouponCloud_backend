@@ -734,6 +734,31 @@ class FeedbackAndComplaintApiTests(TestCase):
 		self.assertEqual(response.data['raised_by']['user_id'], self.student.user_id)
 		self.assertEqual(response.data['hostel_id'], self.mess.hostel_id)
 
+	def test_cannot_create_duplicate_feedback_for_same_meal_on_same_day(self):
+		Feedback.objects.create(
+			raised_by=self.student,
+			coupon_meal=CouponMeal.DINNER,
+			rating=4,
+			description='First dinner feedback.',
+		)
+
+		response = self.client.post(
+			reverse('feedback-list-create'),
+			{
+				'raised_by_id': self.student.user_id,
+				'coupon_meal': CouponMeal.DINNER,
+				'rating': 5,
+				'description': 'Second dinner feedback.',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 400)
+		self.assertEqual(
+			response.data['detail'][0],
+			'This user has already submitted feedback for this meal today.',
+		)
+
 	def test_create_complaint(self):
 		image_buffer = BytesIO()
 		Image.new('RGB', (1, 1), color='white').save(image_buffer, format='PNG')
@@ -754,6 +779,38 @@ class FeedbackAndComplaintApiTests(TestCase):
 		self.assertEqual(response.status_code, 201)
 		self.assertEqual(response.data['coupon_meal'], CouponMeal.BREAKFAST)
 		self.assertEqual(response.data['mess']['id'], self.mess.id)
+
+	def test_cannot_create_duplicate_complaint_for_same_meal_on_same_day(self):
+		Complaint.objects.create(
+			raised_by=self.student,
+			mess=self.mess,
+			coupon_meal=CouponMeal.BREAKFAST,
+			complaint_type='Food Quality',
+			photo=SimpleUploadedFile('complaint-a.jpg', b'filecontent', content_type='image/jpeg'),
+			description='First breakfast complaint.',
+		)
+
+		image_buffer = BytesIO()
+		Image.new('RGB', (1, 1), color='white').save(image_buffer, format='PNG')
+		photo = SimpleUploadedFile('complaint-b.png', image_buffer.getvalue(), content_type='image/png')
+
+		response = self.client.post(
+			reverse('complaint-list-create'),
+			{
+				'raised_by_id': self.student.user_id,
+				'hostel_id': self.mess.hostel_id,
+				'coupon_meal': CouponMeal.BREAKFAST,
+				'complaint_type': 'Hygiene',
+				'photo': photo,
+				'description': 'Second breakfast complaint.',
+			},
+		)
+
+		self.assertEqual(response.status_code, 400)
+		self.assertEqual(
+			response.data['detail'][0],
+			'This user has already submitted a complaint for this meal today.',
+		)
 
 	def test_list_feedbacks_and_complaints(self):
 		Feedback.objects.create(
@@ -780,6 +837,13 @@ class FeedbackAndComplaintApiTests(TestCase):
 		self.assertEqual(len(complaint_response.data), 1)
 
 	def test_feedback_daily_summary_returns_average_and_rating_count_per_meal(self):
+		same_hostel_second_student = Student.objects.create(
+			name='Third API Student',
+			email='api.student3@example.com',
+			role=UserRole.STUDENT,
+			student_id='STU202',
+			mess=self.mess,
+		)
 		second_mess = Mess.objects.create(
 			name='Hostel 2 Mess',
 			hostel_id='H2',
@@ -799,7 +863,7 @@ class FeedbackAndComplaintApiTests(TestCase):
 			description='Nice breakfast.',
 		)
 		Feedback.objects.create(
-			raised_by=self.student,
+			raised_by=same_hostel_second_student,
 			coupon_meal=CouponMeal.BREAKFAST,
 			rating=2,
 			description='Average breakfast.',

@@ -1,5 +1,6 @@
 from django.contrib.auth import authenticate
 from django.db import IntegrityError, transaction
+from django.utils import timezone
 from zoneinfo import ZoneInfo
 from rest_framework import serializers
 
@@ -363,6 +364,8 @@ class FeedbackSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         raised_by = attrs.get('raised_by')
+        coupon_meal = attrs.get('coupon_meal')
+        submitted_on = attrs.get('submitted_on', timezone.localdate())
 
         if hasattr(raised_by, 'student'):
             attrs['hostel_id'] = raised_by.student.hostel_id
@@ -371,6 +374,15 @@ class FeedbackSerializer(serializers.ModelSerializer):
         else:
             raise serializers.ValidationError(
                 {'raised_by_id': 'Selected user must be linked to a mess.'}
+            )
+
+        if Feedback.objects.filter(
+            raised_by=raised_by,
+            coupon_meal=coupon_meal,
+            submitted_on=submitted_on,
+        ).exists():
+            raise serializers.ValidationError(
+                {'detail': 'This user has already submitted feedback for this meal today.'}
             )
 
         return attrs
@@ -404,6 +416,22 @@ class ComplaintSerializer(serializers.ModelSerializer):
         except Mess.MultipleObjectsReturned as exc:
             raise serializers.ValidationError('Multiple mess rows found for this hostel_id.') from exc
         return mess
+
+    def validate(self, attrs):
+        raised_by = attrs.get('raised_by')
+        coupon_meal = attrs.get('coupon_meal')
+        submitted_on = attrs.get('submitted_on', timezone.localdate())
+
+        if Complaint.objects.filter(
+            raised_by=raised_by,
+            coupon_meal=coupon_meal,
+            submitted_on=submitted_on,
+        ).exists():
+            raise serializers.ValidationError(
+                {'detail': 'This user has already submitted a complaint for this meal today.'}
+            )
+
+        return attrs
 
     def create(self, validated_data):
         validated_data['mess'] = validated_data.pop('hostel_id')
