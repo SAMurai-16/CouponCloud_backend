@@ -25,6 +25,7 @@ from .models import (
 	Mess,
 	MessMenu,
 	MessMenuItem,
+	Staff,
 	Student,
 	UserRole,
 	Weekday,
@@ -341,6 +342,15 @@ class AuthApiTests(TestCase):
 		)
 		self.student.set_password('StrongPass123')
 		self.student.save(update_fields=['password'])
+		self.staff = Staff.objects.create(
+			name='Test Staff',
+			email='loginstaff@example.com',
+			role=UserRole.STAFF,
+			staff_id='STA100',
+			mess=self.mess,
+		)
+		self.staff.set_password('StrongPass123')
+		self.staff.save(update_fields=['password'])
 		Coupon.create_daily_coupons_for_student(self.student, coupon_date=date(2026, 4, 9))
 
 	def test_login_creates_todays_student_coupons(self):
@@ -369,6 +379,21 @@ class AuthApiTests(TestCase):
 
 		self.assertEqual(response.status_code, 400)
 		self.assertEqual(response.data['detail'][0], 'Invalid student ID or password.')
+
+	def test_staff_login_with_staff_id(self):
+		response = self.client.post(
+			reverse('login'),
+			{
+				'staff_id': 'STA100',
+				'password': 'StrongPass123',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertEqual(response.data['daily_coupons_created'], 0)
+		self.assertEqual(response.data['user']['role'], UserRole.STAFF)
+		self.assertEqual(response.data['user']['profile']['staff_id'], 'STA100')
 
 	def test_signed_in_student_can_fetch_their_coupons(self):
 		self.client.force_authenticate(user=self.student)
@@ -733,6 +758,20 @@ class FeedbackAndComplaintApiTests(TestCase):
 		self.assertEqual(response.data['coupon_meal'], CouponMeal.DINNER)
 		self.assertEqual(response.data['raised_by']['user_id'], self.student.user_id)
 		self.assertEqual(response.data['hostel_id'], self.mess.hostel_id)
+
+	def test_create_feedback_without_description(self):
+		response = self.client.post(
+			reverse('feedback-list-create'),
+			{
+				'raised_by_id': self.student.user_id,
+				'coupon_meal': CouponMeal.LUNCH,
+				'rating': 4,
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 201)
+		self.assertEqual(response.data['description'], '')
 
 	def test_cannot_create_duplicate_feedback_for_same_meal_on_same_day(self):
 		Feedback.objects.create(

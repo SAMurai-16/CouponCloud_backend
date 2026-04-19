@@ -335,22 +335,37 @@ class SignupSerializer(serializers.Serializer):
 
 
 class LoginSerializer(serializers.Serializer):
-    student_id = serializers.CharField(max_length=50)
+    student_id = serializers.CharField(max_length=50, required=False, allow_blank=False)
+    staff_id = serializers.CharField(max_length=50, required=False, allow_blank=False)
     password = serializers.CharField(write_only=True)
 
     def validate(self, attrs):
-        try:
-            student = Student.objects.get(student_id=attrs['student_id'])
-        except Student.DoesNotExist as exc:
-            raise serializers.ValidationError({'detail': 'Invalid student ID or password.'}) from exc
+        student_id = attrs.get('student_id')
+        staff_id = attrs.get('staff_id')
+
+        if bool(student_id) == bool(staff_id):
+            raise serializers.ValidationError({'detail': 'Provide exactly one of student_id or staff_id.'})
+
+        if student_id:
+            try:
+                user_record = Student.objects.get(student_id=student_id)
+            except Student.DoesNotExist as exc:
+                raise serializers.ValidationError({'detail': 'Invalid student ID or password.'}) from exc
+            invalid_credentials_message = 'Invalid student ID or password.'
+        else:
+            try:
+                user_record = Staff.objects.get(staff_id=staff_id)
+            except Staff.DoesNotExist as exc:
+                raise serializers.ValidationError({'detail': 'Invalid staff ID or password.'}) from exc
+            invalid_credentials_message = 'Invalid staff ID or password.'
 
         user = authenticate(
             request=self.context.get('request'),
-            email=student.email,
+            email=user_record.email,
             password=attrs['password'],
         )
         if user is None:
-            raise serializers.ValidationError({'detail': 'Invalid student ID or password.'})
+            raise serializers.ValidationError({'detail': invalid_credentials_message})
 
         attrs['user'] = user
         return attrs
@@ -398,6 +413,9 @@ class FeedbackSerializer(serializers.ModelSerializer):
             'rating',
             'description',
         ]
+        extra_kwargs = {
+            'description': {'required': False, 'allow_blank': True},
+        }
 
 
 class ComplaintSerializer(serializers.ModelSerializer):

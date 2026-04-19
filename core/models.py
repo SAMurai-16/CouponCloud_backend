@@ -157,7 +157,7 @@ class Feedback(models.Model):
 	rating = models.PositiveSmallIntegerField(
 		validators=[MinValueValidator(1), MaxValueValidator(5)]
 	)
-	description = models.TextField()
+	description = models.TextField(blank=True, default='')
 	created_at = models.DateTimeField(default=timezone.now, db_index=True)
 	submitted_on = models.DateField(default=timezone.localdate, db_index=True, null=True, blank=True)
 

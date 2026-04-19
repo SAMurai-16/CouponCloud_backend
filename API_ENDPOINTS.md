@@ -56,11 +56,20 @@ Media storage:
 
 ### `POST /login/`
 - Auth: Not required
-- Request JSON:
+- Request JSON (student):
 
 ```json
 {
   "student_id": "STU1001",
+  "password": "StrongPass123"
+}
+```
+
+- Request JSON (staff):
+
+```json
+{
+  "staff_id": "STA2001",
   "password": "StrongPass123"
 }
 ```
