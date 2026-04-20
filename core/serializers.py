@@ -41,6 +41,7 @@ class StudentSerializer(serializers.ModelSerializer):
 class CouponSerializer(serializers.ModelSerializer):
     qr_image_url = serializers.SerializerMethodField()
     valid_till = serializers.SerializerMethodField()
+    scanned_at = serializers.SerializerMethodField()
 
     class Meta:
         model = Coupon
@@ -51,6 +52,7 @@ class CouponSerializer(serializers.ModelSerializer):
             'coupon_meal',
             'coupon_date',
             'valid_till',
+            'scanned_at',
             'qr_payload',
             'qr_image_url',
         ]
@@ -68,6 +70,12 @@ class CouponSerializer(serializers.ModelSerializer):
             return None
 
         return obj.valid_till.astimezone(ZoneInfo('Asia/Kolkata')).isoformat()
+
+    def get_scanned_at(self, obj):
+        if not obj.scanned_at:
+            return None
+
+        return obj.scanned_at.astimezone(ZoneInfo('Asia/Kolkata')).isoformat()
 
 
 class CouponExchangeRequestSerializer(serializers.ModelSerializer):

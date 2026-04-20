@@ -101,7 +101,7 @@ Media storage:
 - Request JSON: None
 
 ### `POST /coupons/verify/`
-- Auth: Not required
+- Auth: Required as authenticated staff/vendor
 - Request JSON:
 
 ```json
@@ -109,6 +109,18 @@ Media storage:
   "qr_payload": "4b03ad4f-5fd8-4b73-ab08-08d18fb8fe2c"
 }
 ```
+
+- Behavior:
+  - Vendor can verify only coupons belonging to the same `hostel_id` as their linked mess.
+  - Coupon can be successfully scanned only once.
+
+- Possible responses:
+  - `200 OK` when QR is valid and belongs to vendor's hostel.
+  - `400 Bad Request` when `qr_payload` is missing.
+  - `403 Forbidden` when requester is not an authenticated vendor/staff.
+  - `403 Forbidden` when coupon belongs to a different hostel.
+  - `409 Conflict` when the coupon has already been scanned.
+  - `404 Not Found` when no coupon exists for the given `qr_payload`.
 
 ---
 

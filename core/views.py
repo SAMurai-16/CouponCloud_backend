@@ -136,15 +136,41 @@ class CouponListView(APIView):
 
 
 class CouponVerifyView(APIView):
-    authentication_classes = []
-    permission_classes = [AllowAny]
+    authentication_classes = [CsrfExemptSessionAuthentication]
+    permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        if not hasattr(request.user, 'staff'):
+            return Response(
+                {'detail': 'Only hostel vendors can verify coupons.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         qr_payload = request.data.get('qr_payload')
         if not qr_payload:
             return Response({'detail': 'qr_payload is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        coupon = get_object_or_404(Coupon.objects.select_related('student', 'student__mess'), qr_payload=qr_payload)
+        with transaction.atomic():
+            coupon = get_object_or_404(
+                Coupon.objects.select_related('student', 'student__mess').select_for_update(),
+                qr_payload=qr_payload,
+            )
+
+            if coupon.hostel_id != request.user.staff.hostel_id:
+                return Response(
+                    {'detail': 'You can only verify coupons for your hostel.'},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
+
+            if coupon.scanned_at:
+                return Response(
+                    {'detail': 'This coupon has already been scanned.'},
+                    status=status.HTTP_409_CONFLICT,
+                )
+
+            coupon.scanned_at = timezone.now()
+            coupon.save(update_fields=['scanned_at'])
+
         return Response(
             {
                 'valid': True,

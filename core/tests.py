@@ -58,6 +58,20 @@ class CouponModelTests(TestCase):
 			student_id='STU002',
 			mess=self.mess_h2,
 		)
+		self.staff_h1 = Staff.objects.create(
+			name='Hostel 1 Vendor',
+			email='vendorh1@example.com',
+			role=UserRole.STAFF,
+			staff_id='STA001',
+			mess=self.mess_h1,
+		)
+		self.staff_h2 = Staff.objects.create(
+			name='Hostel 2 Vendor',
+			email='vendorh2@example.com',
+			role=UserRole.STAFF,
+			staff_id='STA002',
+			mess=self.mess_h2,
+		)
 
 	def test_create_coupon(self):
 		coupon = Coupon.objects.create(
@@ -156,6 +170,7 @@ class CouponModelTests(TestCase):
 			coupon_meal=CouponMeal.BREAKFAST,
 			coupon_date=date(2026, 4, 8),
 		)
+		self.client.force_authenticate(user=self.staff_h1)
 
 		response = self.client.post(
 			reverse('coupon-verify'),
@@ -167,6 +182,35 @@ class CouponModelTests(TestCase):
 		self.assertTrue(response.data['valid'])
 		self.assertEqual(response.data['coupon']['coupon_id'], coupon.coupon_id)
 		self.assertIsNotNone(response.data['coupon']['valid_till'])
+		self.assertIsNotNone(response.data['coupon']['scanned_at'])
+
+	def test_qr_verify_rejects_coupon_if_already_scanned(self):
+		coupon = Coupon.objects.create(
+			student=self.student,
+			hostel_id='H1',
+			coupon_id='CPN011',
+			coupon_meal=CouponMeal.LUNCH,
+			coupon_date=date(2026, 4, 8),
+		)
+		self.client.force_authenticate(user=self.staff_h1)
+
+		first_response = self.client.post(
+			reverse('coupon-verify'),
+			{'qr_payload': coupon.qr_payload},
+			format='json',
+		)
+		second_response = self.client.post(
+			reverse('coupon-verify'),
+			{'qr_payload': coupon.qr_payload},
+			format='json',
+		)
+
+		coupon.refresh_from_db()
+
+		self.assertEqual(first_response.status_code, 200)
+		self.assertEqual(second_response.status_code, 409)
+		self.assertEqual(second_response.data['detail'], 'This coupon has already been scanned.')
+		self.assertIsNotNone(coupon.scanned_at)
 
 	def test_create_daily_coupons_creates_all_meals_for_each_student(self):
 		created_count = Coupon.create_daily_coupons(coupon_date=date(2026, 4, 10))
@@ -214,6 +258,7 @@ class CouponModelTests(TestCase):
 		self.assertEqual(coupon.student_id, self.other_student.user_id)
 		self.assertNotEqual(coupon.qr_payload, old_payload)
 		self.assertEqual(coupon.qr_payload, str(coupon.qr_token))
+		self.client.force_authenticate(user=self.staff_h1)
 
 		verify_response = self.client.post(
 			reverse('coupon-verify'),
@@ -222,6 +267,42 @@ class CouponModelTests(TestCase):
 		)
 
 		self.assertEqual(verify_response.status_code, 404)
+
+	def test_qr_verify_rejects_unauthenticated_request(self):
+		coupon = Coupon.objects.create(
+			student=self.student,
+			hostel_id='H1',
+			coupon_id='CPN040',
+			coupon_meal=CouponMeal.BREAKFAST,
+			coupon_date=date(2026, 4, 8),
+		)
+
+		response = self.client.post(
+			reverse('coupon-verify'),
+			{'qr_payload': coupon.qr_payload},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 403)
+
+	def test_qr_verify_rejects_other_hostel_vendor(self):
+		coupon = Coupon.objects.create(
+			student=self.student,
+			hostel_id='H1',
+			coupon_id='CPN041',
+			coupon_meal=CouponMeal.LUNCH,
+			coupon_date=date(2026, 4, 8),
+		)
+		self.client.force_authenticate(user=self.staff_h2)
+
+		response = self.client.post(
+			reverse('coupon-verify'),
+			{'qr_payload': coupon.qr_payload},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 403)
+		self.assertEqual(response.data['detail'], 'You can only verify coupons for your hostel.')
 
 	def test_rejecting_transfer_keeps_coupon_with_original_owner(self):
 		coupon = Coupon.objects.create(
