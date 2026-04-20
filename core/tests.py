@@ -476,6 +476,65 @@ class AuthApiTests(TestCase):
 		self.assertEqual(response.data['user']['role'], UserRole.STAFF)
 		self.assertEqual(response.data['user']['profile']['staff_id'], 'STA100')
 
+	def test_login_after_cross_hostel_exchange_does_not_crash(self):
+		other_mess = Mess.objects.create(
+			name='Hostel 2 Mess',
+			hostel_id='H2',
+		)
+		other_student = Student.objects.create(
+			name='Other Student',
+			email='other.login@example.com',
+			role=UserRole.STUDENT,
+			student_id='STU200',
+			mess=other_mess,
+		)
+		other_student.set_password('StrongPass123')
+		other_student.save(update_fields=['password'])
+
+		transfer_date = date(2026, 4, 20)
+		requester_coupon = Coupon.objects.create(
+			student=self.student,
+			hostel_id='H1',
+			coupon_id='20260420-H1-STU100-B',
+			coupon_meal=CouponMeal.BREAKFAST,
+			coupon_date=transfer_date,
+		)
+		recipient_coupon = Coupon.objects.create(
+			student=other_student,
+			hostel_id='H2',
+			coupon_id='20260420-H2-STU200-B',
+			coupon_meal=CouponMeal.BREAKFAST,
+			coupon_date=transfer_date,
+		)
+		transfer = CouponTransferRequest.objects.create(
+			coupon=requester_coupon,
+			requested_by=self.student,
+			requested_to=other_student,
+		)
+		transfer.accept()
+
+		response = self.client.post(
+			reverse('login'),
+			{
+				'student_id': 'STU100',
+				'password': 'StrongPass123',
+			},
+			format='json',
+		)
+
+		self.assertEqual(response.status_code, 200)
+		self.assertTrue(
+			Coupon.objects.filter(
+				student=self.student,
+				coupon_meal=CouponMeal.BREAKFAST,
+				coupon_date=transfer_date,
+			).exists()
+		)
+		self.assertEqual(
+			Coupon.objects.filter(coupon_id='20260420-H1-STU100-B').count(),
+			1,
+		)
+
 	def test_signed_in_student_can_fetch_their_coupons(self):
 		self.client.force_authenticate(user=self.student)
 
